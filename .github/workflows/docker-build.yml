@@ -1,0 +1,110 @@
+# GitHub Actions 工作流：自动构建 Docker 镜像并推送到 Docker Hub 和 GitHub Container Registry
+# 触发条件：推送标签（v*）、推送到 main 分支、手动触发
+
+name: 构建 Docker 镜像
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  # 允许手动触发工作流
+  workflow_dispatch:
+
+env:
+  # Docker Hub 镜像名称（需要在 secrets 中配置 DOCKERHUB_USERNAME）
+  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/gemini-business2api
+  # GitHub Container Registry 镜像名称
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/gemini-business2api
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      # 检出代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      # 设置 QEMU（用于多平台构建）
+      - name: 设置 QEMU
+        uses: docker/setup-qemu-action@v3
+      
+      # 设置 Docker Buildx
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      # 登录 Docker Hub（可选，如果配置了 secrets）
+      - name: 登录 Docker Hub
+        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      # 登录 GitHub Container Registry
+      - name: 登录 GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      # 提取 Docker 元数据（标签和标签）
+      - name: 提取 Docker 元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            # 对于版本标签（v1.0.0）-> 1.0.0, 1.0, 1, latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # 对于 main/master 分支 -> latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 对于所有分支 -> 分支名称
+            type=ref,event=branch
+            # 对于 PR -> pr-123
+            type=ref,event=pr
+            # 短 SHA（始终添加）
+            type=sha,prefix=sha-
+      
+      # 构建并推送 Docker 镜像
+      - name: 构建并推送 Docker 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      # 输出镜像摘要
+      - name: 输出镜像摘要
+        run: |
+          echo "## 🐳 Docker 镜像构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 镜像标签" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 支持的平台" >> $GITHUB_STEP_SUMMARY
+          echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
+          echo "- linux/arm64" >> $GITHUB_STEP_SUMMARY
