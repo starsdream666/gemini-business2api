@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install Python dependencies
 COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -7,17 +12,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y gcc \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy backend code
 COPY main.py .
-# 复制 core 模块
 COPY core ./core
-# 复制 util 目录
 COPY util ./util
-# 复制 templates 目录
-COPY templates ./templates
-# 复制 static 目录
+
+# Copy prebuilt static assets
 COPY static ./static
-# 创建数据目录
-RUN mkdir -p ./data/images
-# 声明数据卷（运行时需要 -v 挂载才能持久化）
+
+# Create data directory (local + HF Spaces Pro)
+RUN mkdir -p ./data
+
+# Declare data volume
 VOLUME ["/app/data"]
+
+# Start service
 CMD ["python", "-u", "main.py"]

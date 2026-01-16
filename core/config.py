@@ -19,6 +19,8 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 
+from core import storage
+
 # 加载 .env 文件
 load_dotenv()
 
@@ -50,6 +52,7 @@ class RetryConfig(BaseModel):
     account_failure_threshold: int = Field(default=3, ge=1, le=10, description="账户失败阈值")
     rate_limit_cooldown_seconds: int = Field(default=600, ge=60, le=3600, description="429冷却时间（秒）")
     session_cache_ttl_seconds: int = Field(default=3600, ge=300, le=86400, description="会话缓存时间（秒）")
+    auto_refresh_accounts_seconds: int = Field(default=60, ge=0, le=600, description="自动刷新账号间隔（秒，0禁用）")
 
 
 class PublicDisplayConfig(BaseModel):
@@ -66,7 +69,6 @@ class SessionConfig(BaseModel):
 class SecurityConfig(BaseModel):
     """安全配置（仅从环境变量读取，不可热更新）"""
     admin_key: str = Field(default="", description="管理员密钥（必需）")
-    path_prefix: str = Field(default="", description="路径前缀（隐藏管理端点）")
     session_secret_key: str = Field(..., description="Session密钥")
 
 
@@ -104,7 +106,7 @@ class ConfigManager:
         加载配置
 
         优先级规则：
-        1. 安全配置（ADMIN_KEY, PATH_PREFIX, SESSION_SECRET_KEY）：仅从环境变量读取
+        1. 安全配置（ADMIN_KEY, SESSION_SECRET_KEY）：仅从环境变量读取
         2. 其他配置：YAML > 环境变量 > 默认值
         """
         # 1. 加载 YAML 配置
@@ -113,7 +115,6 @@ class ConfigManager:
         # 2. 加载安全配置（仅从环境变量，不允许 Web 修改）
         security_config = SecurityConfig(
             admin_key=os.getenv("ADMIN_KEY", ""),
-            path_prefix=os.getenv("PATH_PREFIX", ""),
             session_secret_key=os.getenv("SESSION_SECRET_KEY", self._generate_secret())
         )
 
@@ -154,6 +155,13 @@ class ConfigManager:
 
     def _load_yaml(self) -> dict:
         """加载 YAML 文件"""
+        if storage.is_database_enabled():
+            try:
+                data = storage.load_settings_sync()
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                print(f"[WARN] 加载数据库设置失败: {e}，使用本地配置")
         if self.yaml_path.exists():
             try:
                 with open(self.yaml_path, 'r', encoding='utf-8') as f:
@@ -168,6 +176,13 @@ class ConfigManager:
 
     def save_yaml(self, data: dict):
         """保存 YAML 配置"""
+        if storage.is_database_enabled():
+            try:
+                saved = storage.save_settings_sync(data)
+                if saved:
+                    return
+            except Exception as e:
+                print(f"[WARN] 保存数据库设置失败: {e}，降级到本地文件")
         self.yaml_path.parent.mkdir(exist_ok=True)
         with open(self.yaml_path, 'w', encoding='utf-8') as f:
             yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
@@ -192,11 +207,6 @@ class ConfigManager:
     def admin_key(self) -> str:
         """管理员密钥"""
         return self._config.security.admin_key
-
-    @property
-    def path_prefix(self) -> str:
-        """路径前缀"""
-        return self._config.security.path_prefix
 
     @property
     def session_secret_key(self) -> str:
@@ -272,6 +282,11 @@ class ConfigManager:
     def session_cache_ttl_seconds(self) -> int:
         """会话缓存时间（秒）"""
         return self._config.retry.session_cache_ttl_seconds
+
+    @property
+    def auto_refresh_accounts_seconds(self) -> int:
+        """自动刷新账号间隔（秒，0禁用）"""
+        return self._config.retry.auto_refresh_accounts_seconds
 
 
 # ==================== 全局配置管理器 ====================
