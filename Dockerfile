@@ -1,3 +1,15 @@
+# Stage 1: Build frontend
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend
+
+# Copy frontend files
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Python runtime
 FROM python:3.11-slim
 WORKDIR /app
 
@@ -18,8 +30,8 @@ COPY main.py .
 COPY core ./core
 COPY util ./util
 
-# Copy prebuilt static assets
-COPY static ./static
+# Copy built frontend assets from builder stage
+COPY --from=frontend-builder /app/static ./static
 
 # Create data directory (local + HF Spaces Pro)
 RUN mkdir -p ./data
